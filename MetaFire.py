@@ -1,25 +1,10 @@
 """
-Streamlit app: Firefighter Metabolism Calculator — Multi-option + Help
+Streamlit app: Firefighter Metabolism Calculator — Multi-option + Help (fixed PDF Unicode issue)
 
-How to use:
-- Save as streamlit_metabolism_calculator_multi_with_help.py
-- requirements.txt should include:
-    streamlit
-    pandas
-    numpy
-    matplotlib
-    fpdf2
-- Deploy on Streamlit Cloud (GitHub repo -> New app -> select file).
-
-Features added in this version:
-- Define multiple options (one per line) in format: Label:weight_kg:sequence
-  Example lines:
-      Baseline:19.9:68,15,68
-      Option A:15.1:45,15,45,15,45
-- Each option can have its own weight and sequence of work/rest minutes.
-- Tooltips (help text) for input fields explaining what they represent.
-- A button + expander that shows a detailed explanatory table for each default parameter.
-- Outputs: results table, instantaneous VO2 plot, cumulative O2 plot, PDF export.
+שינויים מרכזיים:
+- במקום לכתוב טקסט עברי ישירות ל-FPDF (שגורם ל-FPDFUnicodeEncodingException),
+  המערכת מייצרת תמונה של טבלת ההסברים באמצעות matplotlib ומציבה את התמונה בדו\"ח PDF.
+- אין צורך להעלות קבצי גופן חיצוניים.
 """
 
 import streamlit as st
@@ -30,9 +15,7 @@ from io import BytesIO
 from fpdf import FPDF
 
 st.set_page_config(page_title="Metabolism Calculator — Multi-option (with Help)", layout="wide")
-st.title("מחשבון מטבוליזם לכבאים — גרסה מרובת אפשרויות עם הסברים")
-st.write("הכנס אופציות בצד שמאל (שורה לכל אופציה) בפורמט `Label:weight_kg:sequence` ואז לחץ 'חשב'.\n"
-         "לדוגמה: `Baseline:19.9:68,15,68` או `Option A:15.1:45,15,45,15,45`.")
+st.title("מחשבון מטבוליזם לכבאים — גרסה מרובת אפשרויות עם הסברים (תיקון PDF)")
 
 # ---------------- Sidebar inputs ----------------
 with st.sidebar.form(key='inputs'):
@@ -50,13 +33,12 @@ with st.sidebar.form(key='inputs'):
     factor_ml_min_per_kg = st.number_input(
         "פקטור שינוי VO₂ per kg (ml O₂·min⁻¹·kg⁻¹)",
         value=33.5,
-        help="בכמה מיליליטר חמצן לדקה עולה/יורד צריכת החמצן עבור כל ק\"ג ציוד שמתווסף/מוסר. "
-             "מחקרים מצביעים על ~33–35 ml/min לק\"ג."
+        help="בכמה מיליליטר חמצן לדקה עולה/יורד צריכת החמצן עבור כל ק\"ג ציוד שמתווסף/מוסר."
     )
     rest_vo2 = st.number_input(
         "VO₂ בזמן מנוחה בתוך הציוד (L/min)",
         value=0.8,
-        help="צריכת חמצן בדקת מנוחה כאשר הכבאי עדיין בחליפת המגן/מסכה — גבוהה ממנוחה מוחלטת בגלל התנגדות נשימה / חום."
+        help="צריכת חמצן בדקת מנוחה כאשר הכבאי עדיין בחליפת המגן/מסכה — גבוהה ממנוחה מוחלטת."
     )
     kcal_per_L = st.number_input(
         "ק״ק ליטר חמצן (kcal/L)",
@@ -72,18 +54,17 @@ with st.sidebar.form(key='inputs'):
 
     st.markdown('---')
     st.markdown("**הזן אופציות (שורה/אופציה)**")
-    st.markdown("פורמט: `Label:weight_kg:sequence`  — sequence = coma-separated minutes (e.g. 68,15,68).")
+    st.markdown("פורמט: `Label:weight_kg:sequence`  — sequence = comma-separated minutes (e.g. 68,15,68).")
     options_text = st.text_area(
         "אפשרויות (שורה לכל אופציה)",
         value='Baseline:19.9:68,15,68\nOption A:15.1:45,15,45,15,45\nOption B:12.67:45,15,45,15,45',
         height=220
     )
 
-    export_pdf_name = st.text_input("שם קובץ ה-PDF להורדה", value="metabolism_report_multi.pdf")
+    export_pdf_name = st.text_input("שם קובץ ה-PDF להורדה", value="metabolism_report_multi_fixed.pdf")
     compute_btn = st.form_submit_button("חשב")
 
-# ---------------- Help / Explanations (button + expander) ----------------
-# Detailed explanation table for default parameters
+# ---------------- Help / Explanations ----------------
 help_table = pd.DataFrame([
     {
         'Parameter (עברית)': 'משקל כבאי (Body mass)',
@@ -117,22 +98,18 @@ help_table = pd.DataFrame([
     }
 ])
 
-# show help controls under main area (not inside form) so user can click at any time
 st.markdown("---")
 st.write("הסברים — לחץ לכפתור לקבלת הסבר מפורט על כל פרמטר:")
 if 'show_help' not in st.session_state:
     st.session_state['show_help'] = False
-
 if st.button("הצג/הסתר הסבר מפורט"):
     st.session_state['show_help'] = not st.session_state['show_help']
-
 if st.session_state['show_help']:
     with st.expander("טבלת הסברים מפורטת לכל פרמטר", expanded=True):
         st.table(help_table)
 
 # ---------------- Helper functions ----------------
 def parse_option_line(line, default_starts_with_work=True):
-    # expected: Label:weight:seq
     parts = [p.strip() for p in line.split(':')]
     if len(parts) < 3:
         return None
@@ -186,7 +163,6 @@ def vo2_from_weights(base_vo2_L_min, ref_weight, target_weight, factor_L_per_min
 
 # ---------------- Main compute ----------------
 if compute_btn:
-    # parse options lines
     lines = [l for l in options_text.splitlines() if l.strip() != '']
     parsed = [parse_option_line(l, default_starts_with_work=starts_with_work) for l in lines]
     parsed = [p for p in parsed if p is not None]
@@ -194,13 +170,11 @@ if compute_btn:
         st.error('לא נמצאו אופציות תקינות — בדוק את קלט הטקסט לפי הפורמט: Label:weight:sequence')
         st.stop()
 
-    # convert VO2 baseline ml/kg/min -> L/min using body mass (we will compute relative to heaviest weight)
     weights = [p['weight'] for p in parsed]
     heaviest = max(weights)
     base_vo2_L_min = vo2_ml_kg_min * body_mass / 1000.0
     factor_L_per_min_per_kg = factor_ml_min_per_kg / 1000.0
 
-    # determine max total minutes for plotting alignment
     seq_totals = [sum(d for _, d in p['sequence']) for p in parsed]
     max_total = max(seq_totals)
 
@@ -260,8 +234,23 @@ if compute_btn:
     ax2.grid(True)
     st.pyplot(fig2)
 
-    # PDF export function
-    def create_pdf(df_table, fig1, fig2, params_text):
+    # ---------------- PDF export (fixed: embed help table as image to avoid fpdf Unicode issue) ----------------
+    def create_help_table_image(df_help):
+        """Create a PNG image in memory from the help_table DataFrame using matplotlib."""
+        fig, ax = plt.subplots(figsize=(8.5, 2.8))  # tune size as needed
+        ax.axis('off')
+        tbl = ax.table(cellText=df_help.values, colLabels=df_help.columns, cellLoc='left', colLoc='left', edges='horizontal')
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(9)
+        tbl.scale(1, 1.2)
+        plt.tight_layout()
+        buf = BytesIO()
+        fig.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        buf.seek(0)
+        return buf
+
+    def create_pdf(df_table, fig1, fig2, params_text, help_df):
         pdf = FPDF(orientation='P', unit='mm', format='A4')
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
@@ -269,6 +258,7 @@ if compute_btn:
         pdf.cell(0, 8, 'Metabolism Report - Multi-option', ln=True)
         pdf.ln(2)
         pdf.set_font('Arial', size=10)
+        # params_text may be ascii (safe), write normally
         pdf.multi_cell(0, 6, params_text)
         pdf.ln(4)
 
@@ -289,6 +279,7 @@ if compute_btn:
             pdf.cell(col_w[4], 6, str(row['kcal_per_min']), border=1)
             pdf.ln()
 
+        # Figures
         pdf.add_page()
         pdf.set_font('Arial', 'B', 12)
         pdf.cell(0, 6, 'Instantaneous VO2 pattern', ln=True)
@@ -307,15 +298,14 @@ if compute_btn:
         pdf.image(img_buf2, x=15, y=None, w=180)
         img_buf2.close()
 
-        # Optionally include help table
+        # Add help table as image (avoids Unicode encoding issues)
+        help_img_buf = create_help_table_image(help_df)
         pdf.add_page()
         pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0, 6, 'Parameter Explanations', ln=True)
+        pdf.cell(0, 6, 'Parameter Explanations (see table)', ln=True)
         pdf.ln(2)
-        pdf.set_font('Arial', size=9)
-        for _, r in help_table.iterrows():
-            pdf.multi_cell(0, 5, f"{r['Parameter (עברית)']} ({r['Default value']}): {r['Explanation']}")
-            pdf.ln(1)
+        pdf.image(help_img_buf, x=10, y=None, w=190)  # fit to page width
+        help_img_buf.close()
 
         out = BytesIO()
         pdf.output(out)
@@ -323,10 +313,9 @@ if compute_btn:
         return out
 
     params_text = (f'Body mass={body_mass} kg | VO2_work={vo2_ml_kg_min} ml/kg/min | '
-                   f'factor={factor_ml_min_per_kg} ml/min/kg | rest_vo2={rest_vo2} L/min '
-                   f'| kcal_per_L={kcal_per_L}')
-    pdf_io = create_pdf(df_res, fig1, fig2, params_text)
-    st.download_button('הורד PDF של הדוח', data=pdf_io.getvalue(), file_name=export_pdf_name, mime='application/pdf')
+                   f'factor={factor_ml_min_per_kg} ml/min/kg | rest_vo2={rest_vo2} L/min | kcal_per_L={kcal_per_L}')
+    pdf_io = create_pdf(df_res, fig1, fig2, params_text, help_table)
+    st.download_button('הורד PDF של הדוח (תיקון Unicode)', data=pdf_io.getvalue(), file_name=export_pdf_name, mime='application/pdf')
 
     st.success('החישוב הושלם — הורד את ה-PDF או עדכן פרמטרים והריץ שוב.')
 
