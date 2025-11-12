@@ -1,28 +1,29 @@
 """
-Streamlit app: Firefighter Metabolism Calculator
-File: streamlit_metabolism_calculator.py
+Streamlit app: Firefighter Metabolism Calculator (multi-option)
 
-Features:
-- Input firefighter body mass, one or more equipment weights (comma-separated), VO2 baseline, factor per kg, rest VO2.
-- Define a duty-cycle sequence as a list of minutes (work/rest/work/rest...) starting with work or rest.
-  Example sequence: "68,15,68" with "Starts with work" = True
-- Computes per-scenario: instantaneous VO2 pattern (L/min), cumulative O2 (L), total kcal, kcal/min, percent savings vs baseline.
-- Shows results in an interactive table, plots (instantaneous VO2 & cumulative O2) and offers PDF export (download button).
+This improved version lets you define multiple equipment options, each with its own weight and its own duty-cycle sequence.
+Input format for options (one per line):
+    Label:weight_kg:sequence
+Example:
+    Baseline:19.9:68,15,68
+    Option A:15.1:45,15,45,15,45
+    Option B:12.67:45,15,45,15,45
+
+Sequence is a comma-separated list of minutes. The sequence starts with WORK by default (you can toggle).
+
+Outputs:
+- Table with per-option VO2 (L/min), total O2 (L), total kcal, kcal/min, percent savings vs baseline (heaviest option).
+- Instantaneous VO2 plot and cumulative O2 plot.
+- PDF export including table and plots.
 
 Deployment:
-- Put this file in a GitHub repo and create a requirements.txt with the packages shown below.
-- Connect the repo to Streamlit Cloud (share.streamlit.io) and deploy.
-
-Recommended requirements.txt:
-streamlit
-pandas
-numpy
-matplotlib
-fpdf2
-
-Notes:
-- This is a self-contained single-file app intended for demonstration and small-scale use.
-- You can easily adapt units and defaults to match local measured VO2 values.
+- Save this file as streamlit_metabolism_calculator_multi.py in a GitHub repo.
+- requirements.txt should contain:
+    streamlit
+    pandas
+    numpy
+    matplotlib
+    fpdf2
 
 """
 
@@ -32,57 +33,53 @@ import numpy as np
 import matplotlib.pyplot as plt
 from io import BytesIO
 from fpdf import FPDF
-import base64
 
-st.set_page_config(page_title="Firefighter Metabolism Calculator", layout="wide")
+st.set_page_config(page_title="Metabolism Calculator — Multi-option", layout="wide")
+st.title("מחשבון מטבוליזם לכבאים — גרסה מרובת אפשרויות")
+st.write("הזן כל שורה בתיבת הקלט בצד שמאל כאופציה נפרדת בפורמט: `Label:weight_kg:sequence`\nלדוגמה: `Baseline:19.9:68,15,68`\nלחץ 'חשב' כדי לראות טבלאות, גרפים וייצוא PDF.")
 
-st.title("מחושב מטבוליזם לכבאים — מחשבון צריכת אנרגיה")
-st.write("הזן את הפרמטרים שלך בצד שמאל ולחץ 'חשב' כדי לראות טבלאות, גרפים וייצוא PDF.")
-
-# --- Sidebar inputs ---
 with st.sidebar.form(key='inputs'):
-    st.header("קלטים")
+    st.header("קלטים כלליים")
     body_mass = st.number_input("משקל הכבאי (kg)", min_value=40.0, max_value=200.0, value=80.0, step=1.0)
-    eq_weights_text = st.text_input("משקל ציוד (kg) - רשימת אופציות מופרדות בפסיקים","19.9,15.1,12.67")
-    vo2_ml_kg_min = st.number_input("VO₂ עבודה (ml/kg/min) - ברירת מחדל לדוגמה", min_value=5.0, max_value=80.0, value=35.0)
+    vo2_ml_kg_min = st.number_input("VO₂ עבודה (ml/kg/min)", min_value=5.0, max_value=80.0, value=35.0)
     factor_ml_min_per_kg = st.number_input("פקטור שינוי VO₂ per kg (ml O₂·min⁻¹·kg⁻¹)", value=33.5)
     rest_vo2 = st.number_input("VO₂ בזמן מנוחה בתוך הציוד (L/min)", value=0.8)
     kcal_per_L = st.number_input("ק״ק ליטר חמצן (kcal/L)", value=5.0)
-
-    st.markdown("---")
-    st.markdown("**הגדרת דפוס עבודה/מנוחה**")
-    seq_text = st.text_input("רשום רצף דקות מופרדות בפסיקים (לדוג': 68,15,68) ", value="68,15,68")
-    starts_with_work = st.checkbox("הסדר מתחיל בעבודה (אם לא - מתחיל במנוחה)", value=True)
-
-    st.markdown("---")
-    st.markdown("**הגדרות מתקדמות (אופציונלי)**")
-    # allow user to select whether multiple weights should be compared
-    export_pdf_name = st.text_input("שם קובץ ה-PDF להורדה", value="metabolism_report.pdf")
-
+    starts_with_work = st.checkbox("הרצף בכל אופציה מתחיל בעבודה (אם לא, מתחיל במנוחה)", value=True)
+    st.markdown('---')
+    st.markdown("**הזן אופציות (שורה/אופציה)**")
+    st.markdown("פורמט: Label:weight_kg:sequence (sequence = ví—comma separated minutes).\nדוגמה:\nBaseline:19.9:68,15,68")
+    options_text = st.text_area("אפשרויות (שורה לכל אופציה)", value='Baseline:19.9:68,15,68\nOption A:15.1:45,15,45,15,45\nOption B:12.67:45,15,45,15,45', height=180)
+    export_pdf_name = st.text_input("שם קובץ ה-PDF להורדה", value="metabolism_report_multi.pdf")
     compute_btn = st.form_submit_button("חשב")
 
 # Helper functions
 
-def parse_weights(text):
-    items = [s.strip() for s in text.split(',') if s.strip()!='']
-    weights=[]
-    for it in items:
-        try:
-            weights.append(float(it))
-        except:
-            pass
-    return weights
+def parse_option_line(line, default_starts_with_work=True):
+    # expected: Label:weight:seq
+    parts = [p.strip() for p in line.split(':')]
+    if len(parts) < 3:
+        return None
+    label = parts[0]
+    try:
+        weight = float(parts[1])
+    except:
+        return None
+    seq_text = parts[2]
+    # allow additional colons only in label by joining
+    if len(parts) > 3:
+        seq_text = ':'.join(parts[2:])
+    seq = parse_sequence(seq_text, default_starts_with_work)
+    return {'label': label, 'weight': weight, 'sequence': seq}
 
 
 def parse_sequence(text, starts_with_work=True):
-    # returns list of tuples ('work'/'rest', minutes)
     parts = [p.strip() for p in text.split(',') if p.strip()!='']
-    seq=[]
-    kinds = []
+    seq = []
     if starts_with_work:
-        kind_order = ['work','rest']
+        kind_order = ['work', 'rest']
     else:
-        kind_order = ['rest','work']
+        kind_order = ['rest', 'work']
     for i,p in enumerate(parts):
         try:
             m = int(float(p))
@@ -94,7 +91,6 @@ def parse_sequence(text, starts_with_work=True):
 
 
 def make_pattern_from_sequence(seq, vo2_work, total_T=None, rest_vo2=0.8):
-    # build minute-by-minute pattern
     total_minutes = sum(duration for _,duration in seq)
     if total_T is None:
         total_T = total_minutes
@@ -104,88 +100,78 @@ def make_pattern_from_sequence(seq, vo2_work, total_T=None, rest_vo2=0.8):
         for i in range(dur):
             if minute > total_T:
                 break
-            if kind=='work':
-                pattern[minute] = vo2_work
-            else:
-                pattern[minute] = rest_vo2
+            pattern[minute] = vo2_work if kind=='work' else rest_vo2
             minute += 1
-    # if anything remains fill with rest_vo2
     while minute <= total_T:
         pattern[minute] = rest_vo2
         minute+=1
     return pattern
 
 
-def vo2_from_weights(base_vo2_L_min, base_weight, target_weight, factor_L_per_min_per_kg):
-    delta = base_weight - target_weight
-    return max(0.1, base_vo2_L_min - factor_L_per_min_per_kg * delta)
+def vo2_from_weights(base_vo2_L_min, ref_weight, target_weight, factor_L_per_min_per_kg):
+    delta = ref_weight - target_weight
+    return max(0.05, base_vo2_L_min - factor_L_per_min_per_kg * delta)
 
-
-# Main compute block
+# Main compute
 if compute_btn:
-    eq_weights = parse_weights(eq_weights_text)
-    if len(eq_weights)==0:
-        st.error("אנא הכנס לפחות משקל ציוד אחד תקין.")
+    # parse options
+    lines = [l for l in options_text.splitlines() if l.strip()!='']
+    parsed = [parse_option_line(l, default_starts_with_work=starts_with_work) for l in lines]
+    parsed = [p for p in parsed if p is not None]
+    if len(parsed) == 0:
+        st.error('לא נמצאו אופציות תקינות — בדוק את קלט הטקסט לפי הפורמט.')
         st.stop()
 
-    seq = parse_sequence(seq_text, starts_with_work=starts_with_work)
-    if sum(d for _,d in seq)==0:
-        st.error("רצף הדקות שהזנת ריק/לא תקין.")
-        st.stop()
-
-    # convert VO2 baseline to L/min
-    baseline_vo2_L_min = vo2_ml_kg_min * body_mass / 1000.0
+    # convert base VO2 ml/kg/min -> L/min for a reference weight we'll choose as the heaviest weight
+    weights = [p['weight'] for p in parsed]
+    heaviest = max(weights)
+    base_vo2_L_min = vo2_ml_kg_min * body_mass / 1000.0
     factor_L_per_min_per_kg = factor_ml_min_per_kg / 1000.0
 
-    # We'll compute results for each equipment weight
+    # determine max total minutes among sequences for plotting alignment
+    seq_totals = [sum(d for _,d in p['sequence']) for p in parsed]
+    max_total = max(seq_totals)
+
     results = []
     patterns = {}
     cumulative = {}
 
-    # Determine total length for plotting (max of sequences lengths)
-    seq_total = sum(d for _,d in seq)
-    max_total = seq_total
-
-    for w in eq_weights:
-        # assume baseline corresponds to first listed weight? We'll compute VO2 relative to baseline_vo2 as if baseline weight is the heaviest in the list
-        # For simplicity, treat baseline_vo2 as VO2 for the first weight in the list if multiple given. Otherwise baseline_vo2 is the provided baseline.
-        # To avoid ambiguity, we'll compute vo2 for each w by reducing from the provided baseline_vo2 proportional to delta from the heaviest weight present.
-        # find heaviest weight to treat as reference
-        heaviest = max(eq_weights)
-        # compute per-weight VO2
-        vo2_w = vo2_from_weights(baseline_vo2_L_min, heaviest, w, factor_L_per_min_per_kg)
-        # build pattern
+    for p in parsed:
+        w = p['weight']
+        label = p['label']
+        seq = p['sequence']
+        vo2_w = vo2_from_weights(base_vo2_L_min, heaviest, w, factor_L_per_min_per_kg)
         pat = make_pattern_from_sequence(seq, vo2_w, total_T=max_total, rest_vo2=rest_vo2)
         cum = np.cumsum(pat)
         total_O2 = float(cum[-1])
         total_kcal = total_O2 * kcal_per_L
         kcal_per_min = total_kcal / max_total
         results.append({
-            'equipment_weight_kg': w,
-            'vo2_work_L_min': round(vo2_w,4),
-            'total_minutes': max_total,
-            'total_O2_L': round(total_O2,3),
-            'total_kcal': round(total_kcal,2),
+            'Label': label,
+            'Weight_kg': w,
+            'VO2_work_L_min': round(vo2_w,4),
+            'Total_minutes': max_total,
+            'Total_O2_L': round(total_O2,3),
+            'Total_kcal': round(total_kcal,2),
             'kcal_per_min': round(kcal_per_min,3)
         })
-        patterns[w] = pat
-        cumulative[w] = cum
+        patterns[label] = pat
+        cumulative[label] = cum
 
-    df_res = pd.DataFrame(results).sort_values(by='equipment_weight_kg', ascending=False)
+    df_res = pd.DataFrame(results).sort_values(by='Weight_kg', ascending=False)
 
-    # compute percent savings relative to heaviest (baseline reference)
-    baseline_total_kcal = df_res['total_kcal'].max()
-    df_res['pct_saving_vs_heaviest_%'] = df_res['total_kcal'].apply(lambda x: round((baseline_total_kcal - x)/baseline_total_kcal*100.0,3))
+    # percent saving vs heaviest (baseline)
+    baseline_kcal = df_res['Total_kcal'].max()
+    df_res['Pct_saving_vs_heaviest_%'] = df_res['Total_kcal'].apply(lambda x: round((baseline_kcal-x)/baseline_kcal*100.0,3))
 
-    # Show table
-    st.subheader("טבלת תוצאות")
+    st.subheader('תוצאות — טבלה')
     st.dataframe(df_res.reset_index(drop=True))
 
-    # Plots: instantaneous VO2 and cumulative O2
-    st.subheader("גרפים")
-    fig1, ax1 = plt.subplots(figsize=(8,3))
-    for w, pat in patterns.items():
-        ax1.plot(np.arange(len(pat)), pat, label=f'{w} kg')
+    # Plots
+    st.subheader('גרפים')
+    fig1, ax1 = plt.subplots(figsize=(9,3))
+    for label, pat in patterns.items():
+        ax1.plot(np.arange(len(pat)), pat, label=f'{label} ({dict((p['label'],p['weight']) for p in parsed)[label]} kg)')
     ax1.set_xlabel('Time (min)')
     ax1.set_ylabel('VO2 (L/min)')
     ax1.set_title('Instantaneous VO2 pattern')
@@ -193,9 +179,9 @@ if compute_btn:
     ax1.grid(True)
     st.pyplot(fig1)
 
-    fig2, ax2 = plt.subplots(figsize=(8,3))
-    for w, cum in cumulative.items():
-        ax2.plot(np.arange(len(cum)), cum, label=f'{w} kg')
+    fig2, ax2 = plt.subplots(figsize=(9,3))
+    for label, cum in cumulative.items():
+        ax2.plot(np.arange(len(cum)), cum, label=f'{label} ({dict((p['label'],p['weight']) for p in parsed)[label]} kg)')
     ax2.set_xlabel('Time (min)')
     ax2.set_ylabel('Cumulative O2 (L)')
     ax2.set_title('Cumulative O2 consumed')
@@ -203,41 +189,38 @@ if compute_btn:
     ax2.grid(True)
     st.pyplot(fig2)
 
-    # Prepare PDF export: render table and figures into a simple PDF
-    def create_pdf(df, fig1, fig2, seq_text, starts_with_work, body_mass, eq_weights_text, vo2_ml_kg_min):
+    # PDF export
+    def create_pdf(df_table, fig1, fig2, params_text):
         pdf = FPDF(orientation='P', unit='mm', format='A4')
         pdf.set_auto_page_break(auto=True, margin=15)
         pdf.add_page()
         pdf.set_font('Arial', 'B', 14)
-        pdf.cell(0, 8, 'Metabolism Report - Firefighter', ln=True)
+        pdf.cell(0, 8, 'Metabolism Report - Multi-option', ln=True)
         pdf.ln(2)
         pdf.set_font('Arial', size=10)
-        pdf.multi_cell(0, 6, f'Parameters: body_mass={body_mass} kg | equipment_weights={eq_weights_text} | VO2_work={vo2_ml_kg_min} ml/kg/min | sequence={seq_text} | starts_with_work={starts_with_work}')
+        pdf.multi_cell(0, 6, params_text)
         pdf.ln(4)
 
-        # Table: we'll render as text
         pdf.set_font('Arial', 'B', 12)
         pdf.cell(0, 6, 'Summary table:', ln=True)
         pdf.ln(2)
         pdf.set_font('Arial', size=9)
-        # header
         col_w = [35,30,30,30,30]
-        hdrs = ['Equipment (kg)', 'VO2 L/min', 'Total O2 (L)', 'Total kcal', 'kcal/min']
+        hdrs = ['Label', 'Weight', 'VO2 L/min', 'Total kcal', 'kcal/min']
         for i,h in enumerate(hdrs):
             pdf.cell(col_w[i], 6, h, border=1)
         pdf.ln()
-        for _,row in df.iterrows():
-            pdf.cell(col_w[0],6,str(row['equipment_weight_kg']),border=1)
-            pdf.cell(col_w[1],6,str(row['vo2_work_L_min']),border=1)
-            pdf.cell(col_w[2],6,str(row['total_O2_L']),border=1)
-            pdf.cell(col_w[3],6,str(row['total_kcal']),border=1)
+        for _,row in df_table.iterrows():
+            pdf.cell(col_w[0],6,str(row['Label']),border=1)
+            pdf.cell(col_w[1],6,str(row['Weight_kg']),border=1)
+            pdf.cell(col_w[2],6,str(row['VO2_work_L_min']),border=1)
+            pdf.cell(col_w[3],6,str(row['Total_kcal']),border=1)
             pdf.cell(col_w[4],6,str(row['kcal_per_min']),border=1)
             pdf.ln()
 
-        # Add figures as images saved to memory
         pdf.add_page()
         pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0,6, 'Instantaneous VO2 pattern', ln=True)
+        pdf.cell(0,6,'Instantaneous VO2 pattern', ln=True)
         img_buf = BytesIO()
         fig1.savefig(img_buf, format='png', dpi=150, bbox_inches='tight')
         img_buf.seek(0)
@@ -246,7 +229,7 @@ if compute_btn:
 
         pdf.add_page()
         pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0,6, 'Cumulative O2 consumed', ln=True)
+        pdf.cell(0,6,'Cumulative O2 consumed', ln=True)
         img_buf2 = BytesIO()
         fig2.savefig(img_buf2, format='png', dpi=150, bbox_inches='tight')
         img_buf2.seek(0)
@@ -258,11 +241,11 @@ if compute_btn:
         out.seek(0)
         return out
 
-    pdf_bytes_io = create_pdf(df_res, fig1, fig2, seq_text, starts_with_work, body_mass, eq_weights_text, vo2_ml_kg_min)
+    params_text = f'Body mass={body_mass} kg | VO2_work={vo2_ml_kg_min} ml/kg/min | factor={factor_ml_min_per_kg} ml/min/kg | rest_vo2={rest_vo2} L/min'
+    pdf_io = create_pdf(df_res, fig1, fig2, params_text)
+    st.download_button('הורד PDF של הדוח', data=pdf_io.getvalue(), file_name=export_pdf_name, mime='application/pdf')
 
-    st.download_button(label='הורד PDF של הדוח', data=pdf_bytes_io.getvalue(), file_name=export_pdf_name, mime='application/pdf')
-
-    st.success('החישוב הושלם — תוכל להוריד את הדוח ב-PDF או לשנות פרמטרים ולהריץ שוב.')
+    st.success('החישוב הושלם — הורד את ה-PDF או שחק עם הערכים.')
 
 else:
-    st.info('הכנס קלטים בסיידבר ולחץ "חשב".')
+    st.info('הזן אופציות בצד שמאל ולחץ "חשב".')
